@@ -1,3 +1,3 @@
 # Kitch
 
-Kitchen Inventory and (maybe) recipe manager. Backend service written in Go,
+Kitchen Inventory and (maybe) recipe manager. Backend service written in Go.
