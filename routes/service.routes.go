@@ -5,7 +5,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Attaches health-related routes to the provided router group.
-func RegisterServiceRoutes(rg *gin.RouterGroup) {
+// RegisterHealthRoutes attaches health-related routes to the provided router group.
+func RegisterHealthRoutes(rg *gin.RouterGroup) {
 	rg.GET("/health", controllers.HealthCheck)
 }
