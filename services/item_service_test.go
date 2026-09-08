@@ -14,11 +14,27 @@ import (
 // --- Mocks ---
 
 type mockItemRepository struct {
+	findAllFunc       func(ctx context.Context) ([]models.Item, error)
+	searchFunc        func(ctx context.Context, query string) ([]models.Item, error)
 	findByBarcodeFunc func(ctx context.Context, barcode string) ([]models.Item, error)
 	findByIDFunc      func(ctx context.Context, id string) (*models.Item, error)
 	createFunc        func(ctx context.Context, item *models.Item) error
 	updateFunc        func(ctx context.Context, item *models.Item) error
 	deleteFunc        func(ctx context.Context, id string) error
+}
+
+func (m *mockItemRepository) FindAll(ctx context.Context) ([]models.Item, error) {
+	if m.findAllFunc != nil {
+		return m.findAllFunc(ctx)
+	}
+	return nil, nil
+}
+
+func (m *mockItemRepository) Search(ctx context.Context, query string) ([]models.Item, error) {
+	if m.searchFunc != nil {
+		return m.searchFunc(ctx, query)
+	}
+	return nil, nil
 }
 
 func (m *mockItemRepository) FindByBarcode(ctx context.Context, barcode string) ([]models.Item, error) {
@@ -475,5 +491,96 @@ func TestDelete_RepoError(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+// --- List Tests ---
+
+func TestList_All(t *testing.T) {
+	repo := &mockItemRepository{
+		findAllFunc: func(_ context.Context) ([]models.Item, error) {
+			return []models.Item{
+				{ID: "1", Name: "Apple"},
+				{ID: "2", Name: "Banana"},
+			}, nil
+		},
+		findByBarcodeFunc: func(_ context.Context, _ string) ([]models.Item, error) {
+			return nil, nil
+		},
+	}
+	offClient := &mockOFFClient{
+		getProductFunc: func(_ context.Context, _ string) (*models.Item, error) {
+			return nil, nil
+		},
+	}
+
+	svc := services.NewItemService(repo, offClient)
+	items, err := svc.List(context.Background(), "")
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 2 {
+		t.Errorf("expected 2 items, got %d", len(items))
+	}
+}
+
+func TestList_WithSearch(t *testing.T) {
+	repo := &mockItemRepository{
+		searchFunc: func(_ context.Context, q string) ([]models.Item, error) {
+			if q != "cola" {
+				t.Errorf("expected query 'cola', got '%s'", q)
+			}
+			return []models.Item{
+				{ID: "1", Name: "Coca-Cola", Brand: "Coca-Cola"},
+			}, nil
+		},
+		findByBarcodeFunc: func(_ context.Context, _ string) ([]models.Item, error) {
+			return nil, nil
+		},
+	}
+	offClient := &mockOFFClient{
+		getProductFunc: func(_ context.Context, _ string) (*models.Item, error) {
+			return nil, nil
+		},
+	}
+
+	svc := services.NewItemService(repo, offClient)
+	items, err := svc.List(context.Background(), "cola")
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Errorf("expected 1 item, got %d", len(items))
+	}
+	if items[0].Name != "Coca-Cola" {
+		t.Errorf("expected 'Coca-Cola', got '%s'", items[0].Name)
+	}
+}
+
+func TestList_RepoError(t *testing.T) {
+	repo := &mockItemRepository{
+		findAllFunc: func(_ context.Context) ([]models.Item, error) {
+			return nil, errors.New("db failed")
+		},
+		findByBarcodeFunc: func(_ context.Context, _ string) ([]models.Item, error) {
+			return nil, nil
+		},
+	}
+	offClient := &mockOFFClient{
+		getProductFunc: func(_ context.Context, _ string) (*models.Item, error) {
+			return nil, nil
+		},
+	}
+
+	svc := services.NewItemService(repo, offClient)
+	items, err := svc.List(context.Background(), "")
+
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if items != nil {
+		t.Errorf("expected nil items, got: %+v", items)
 	}
 }

@@ -60,6 +60,24 @@ func (ctrl *ItemController) LookupBarcode(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+// ListItems handles GET /api/items.
+// Supports an optional ?q= query parameter for searching by name, brand, or barcode.
+func (ctrl *ItemController) ListItems(c *gin.Context) {
+	query := c.Query("q")
+
+	items, err := ctrl.service.List(c.Request.Context(), query)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if items == nil {
+		items = []models.Item{}
+	}
+
+	c.JSON(http.StatusOK, items)
+}
+
 // CreateItem handles POST /api/items.
 // It accepts all item attributes in the body and persists a new item.
 func (ctrl *ItemController) CreateItem(c *gin.Context) {

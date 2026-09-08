@@ -75,6 +75,23 @@ func (s *ItemService) LookupBarcode(ctx context.Context, barcode string) (*Looku
 	}, nil
 }
 
+// List returns all items, optionally filtered by a search query.
+func (s *ItemService) List(ctx context.Context, query string) ([]models.Item, error) {
+	if query != "" {
+		items, err := s.repo.Search(ctx, query)
+		if err != nil {
+			return nil, fmt.Errorf("failed to search items: %w", err)
+		}
+		return items, nil
+	}
+
+	items, err := s.repo.FindAll(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list items: %w", err)
+	}
+	return items, nil
+}
+
 // Create persists a new item with a generated UUID.
 func (s *ItemService) Create(ctx context.Context, item models.Item) (*models.Item, error) {
 	item.ID = uuid.New().String()

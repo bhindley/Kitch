@@ -6,6 +6,7 @@ import (
 	"github.com/bhindley/Kitch/clients"
 	"github.com/bhindley/Kitch/config"
 	"github.com/bhindley/Kitch/controllers"
+	"github.com/bhindley/Kitch/middleware"
 	"github.com/bhindley/Kitch/repositories"
 	"github.com/bhindley/Kitch/routes"
 	"github.com/bhindley/Kitch/services"
@@ -32,6 +33,7 @@ func main() {
 
 	// Router
 	router := gin.Default()
+	router.Use(middleware.CORS())
 	api := router.Group("/api")
 
 	routes.RegisterHealthRoutes(api)

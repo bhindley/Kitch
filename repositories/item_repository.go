@@ -12,6 +12,8 @@ import (
 
 // ItemRepository defines the data access contract for items.
 type ItemRepository interface {
+	FindAll(ctx context.Context) ([]models.Item, error)
+	Search(ctx context.Context, query string) ([]models.Item, error)
 	FindByBarcode(ctx context.Context, barcode string) ([]models.Item, error)
 	FindByID(ctx context.Context, id string) (*models.Item, error)
 	Create(ctx context.Context, item *models.Item) error
@@ -29,15 +31,11 @@ func NewPostgresItemRepository(pool *pgxpool.Pool) *PostgresItemRepository {
 	return &PostgresItemRepository{pool: pool}
 }
 
-// FindByBarcode returns all items matching the given barcode.
-// Returns an empty slice if none are found.
-func (r *PostgresItemRepository) FindByBarcode(ctx context.Context, barcode string) ([]models.Item, error) {
-	query := `SELECT id, name, barcode, brand, container_size, image_url
-	          FROM items WHERE barcode = $1`
-
-	rows, err := r.pool.Query(ctx, query, barcode)
+// scanItems executes a query and scans the results into a slice of items.
+func (r *PostgresItemRepository) scanItems(ctx context.Context, query string, args ...any) ([]models.Item, error) {
+	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query items by barcode: %w", err)
+		return nil, fmt.Errorf("failed to query items: %w", err)
 	}
 	defer rows.Close()
 
@@ -62,6 +60,31 @@ func (r *PostgresItemRepository) FindByBarcode(ctx context.Context, barcode stri
 	}
 
 	return items, nil
+}
+
+// FindAll returns all items ordered by name.
+func (r *PostgresItemRepository) FindAll(ctx context.Context) ([]models.Item, error) {
+	return r.scanItems(ctx,
+		`SELECT id, name, barcode, brand, container_size, image_url
+		 FROM items ORDER BY name`)
+}
+
+// Search returns items where the name, brand, or barcode matches the query.
+func (r *PostgresItemRepository) Search(ctx context.Context, q string) ([]models.Item, error) {
+	return r.scanItems(ctx,
+		`SELECT id, name, barcode, brand, container_size, image_url
+		 FROM items
+		 WHERE name ILIKE $1 OR brand ILIKE $1 OR barcode ILIKE $1
+		 ORDER BY name`,
+		"%"+q+"%")
+}
+
+// FindByBarcode returns all items matching the given barcode.
+func (r *PostgresItemRepository) FindByBarcode(ctx context.Context, barcode string) ([]models.Item, error) {
+	return r.scanItems(ctx,
+		`SELECT id, name, barcode, brand, container_size, image_url
+		 FROM items WHERE barcode = $1`,
+		barcode)
 }
 
 // FindByID looks up a single item by its ID. Returns nil, nil if not found.
@@ -94,12 +117,7 @@ func (r *PostgresItemRepository) Create(ctx context.Context, item *models.Item) 
 	          VALUES ($1, $2, $3, $4, $5, $6)`
 
 	_, err := r.pool.Exec(ctx, query,
-		item.ID,
-		item.Name,
-		item.Barcode,
-		item.Brand,
-		item.ContainerSize,
-		item.ImageURL,
+		item.ID, item.Name, item.Barcode, item.Brand, item.ContainerSize, item.ImageURL,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to insert item: %w", err)
@@ -115,12 +133,7 @@ func (r *PostgresItemRepository) Update(ctx context.Context, item *models.Item) 
 	          WHERE id = $1`
 
 	result, err := r.pool.Exec(ctx, query,
-		item.ID,
-		item.Name,
-		item.Barcode,
-		item.Brand,
-		item.ContainerSize,
-		item.ImageURL,
+		item.ID, item.Name, item.Barcode, item.Brand, item.ContainerSize, item.ImageURL,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update item: %w", err)
@@ -135,9 +148,7 @@ func (r *PostgresItemRepository) Update(ctx context.Context, item *models.Item) 
 
 // Delete removes an item by its ID.
 func (r *PostgresItemRepository) Delete(ctx context.Context, id string) error {
-	query := `DELETE FROM items WHERE id = $1`
-
-	result, err := r.pool.Exec(ctx, query, id)
+	result, err := r.pool.Exec(ctx, `DELETE FROM items WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("failed to delete item: %w", err)
 	}

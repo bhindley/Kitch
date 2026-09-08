@@ -20,6 +20,10 @@ import (
 // --- Mocks ---
 
 type controllerTestRepo struct {
+	findAllResult       []models.Item
+	findAllErr          error
+	searchResult        []models.Item
+	searchErr           error
 	findByBarcodeResult []models.Item
 	findByBarcodeErr    error
 	findByIDResult      *models.Item
@@ -27,6 +31,14 @@ type controllerTestRepo struct {
 	createErr           error
 	updateErr           error
 	deleteErr           error
+}
+
+func (r *controllerTestRepo) FindAll(_ context.Context) ([]models.Item, error) {
+	return r.findAllResult, r.findAllErr
+}
+
+func (r *controllerTestRepo) Search(_ context.Context, _ string) ([]models.Item, error) {
+	return r.searchResult, r.searchErr
 }
 
 func (r *controllerTestRepo) FindByBarcode(_ context.Context, _ string) ([]models.Item, error) {
@@ -77,10 +89,94 @@ func setupRouter(svc *services.ItemService) *gin.Engine {
 	router := gin.New()
 	ctrl := controllers.NewItemController(svc)
 	router.GET("/api/barcode/:barcode", ctrl.LookupBarcode)
+	router.GET("/api/items", ctrl.ListItems)
 	router.POST("/api/items", ctrl.CreateItem)
 	router.PUT("/api/items/:id", ctrl.UpdateItem)
 	router.DELETE("/api/items/:id", ctrl.DeleteItem)
 	return router
+}
+
+// --- ListItems Tests ---
+
+func TestListItems_All(t *testing.T) {
+	repo := &controllerTestRepo{
+		findAllResult: []models.Item{
+			{ID: "1", Name: "Apple"},
+			{ID: "2", Name: "Banana"},
+		},
+	}
+	offClient := &controllerTestOFF{}
+	svc := services.NewItemService(repo, offClient)
+	router := setupRouter(svc)
+
+	w := performRequest(router, "GET", "/api/items", nil)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", w.Code)
+	}
+
+	var items []models.Item
+	json.Unmarshal(w.Body.Bytes(), &items)
+	if len(items) != 2 {
+		t.Errorf("expected 2 items, got %d", len(items))
+	}
+}
+
+func TestListItems_Search(t *testing.T) {
+	repo := &controllerTestRepo{
+		searchResult: []models.Item{
+			{ID: "1", Name: "Coca-Cola"},
+		},
+	}
+	offClient := &controllerTestOFF{}
+	svc := services.NewItemService(repo, offClient)
+	router := setupRouter(svc)
+
+	w := performRequest(router, "GET", "/api/items?q=cola", nil)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", w.Code)
+	}
+
+	var items []models.Item
+	json.Unmarshal(w.Body.Bytes(), &items)
+	if len(items) != 1 {
+		t.Errorf("expected 1 item, got %d", len(items))
+	}
+}
+
+func TestListItems_Empty(t *testing.T) {
+	repo := &controllerTestRepo{}
+	offClient := &controllerTestOFF{}
+	svc := services.NewItemService(repo, offClient)
+	router := setupRouter(svc)
+
+	w := performRequest(router, "GET", "/api/items", nil)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", w.Code)
+	}
+
+	var items []models.Item
+	json.Unmarshal(w.Body.Bytes(), &items)
+	if len(items) != 0 {
+		t.Errorf("expected empty array, got %d items", len(items))
+	}
+}
+
+func TestListItems_InternalError(t *testing.T) {
+	repo := &controllerTestRepo{
+		findAllErr: errors.New("db failed"),
+	}
+	offClient := &controllerTestOFF{}
+	svc := services.NewItemService(repo, offClient)
+	router := setupRouter(svc)
+
+	w := performRequest(router, "GET", "/api/items", nil)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected status 500, got %d", w.Code)
+	}
 }
 
 // --- LookupBarcode Tests ---
