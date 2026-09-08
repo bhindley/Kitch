@@ -14,22 +14,39 @@ import (
 	"github.com/bhindley/Kitch/models"
 	"github.com/bhindley/Kitch/services"
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5"
 )
 
 // --- Mocks ---
 
 type controllerTestRepo struct {
-	findResult *models.Item
-	findErr    error
-	createErr  error
+	findByBarcodeResult []models.Item
+	findByBarcodeErr    error
+	findByIDResult      *models.Item
+	findByIDErr         error
+	createErr           error
+	updateErr           error
+	deleteErr           error
 }
 
-func (r *controllerTestRepo) FindByBarcode(_ context.Context, _ string) (*models.Item, error) {
-	return r.findResult, r.findErr
+func (r *controllerTestRepo) FindByBarcode(_ context.Context, _ string) ([]models.Item, error) {
+	return r.findByBarcodeResult, r.findByBarcodeErr
+}
+
+func (r *controllerTestRepo) FindByID(_ context.Context, _ string) (*models.Item, error) {
+	return r.findByIDResult, r.findByIDErr
 }
 
 func (r *controllerTestRepo) Create(_ context.Context, _ *models.Item) error {
 	return r.createErr
+}
+
+func (r *controllerTestRepo) Update(_ context.Context, _ *models.Item) error {
+	return r.updateErr
+}
+
+func (r *controllerTestRepo) Delete(_ context.Context, _ string) error {
+	return r.deleteErr
 }
 
 type controllerTestOFF struct {
@@ -37,11 +54,12 @@ type controllerTestOFF struct {
 	err    error
 }
 
-func (c *controllerTestOFF) GetProductByBarcode(_ context.Context, _ string) (*models.Item, error) {
+func (c *controllerTestOFF) GetProductByBarcode(_ context.Context, barcode string) (*models.Item, error) {
 	return c.result, c.err
 }
 
-// helper to build a gin test context with a JSON request body.
+// --- Helpers ---
+
 func performRequest(router *gin.Engine, method, path string, body interface{}) *httptest.ResponseRecorder {
 	var reqBody []byte
 	if body != nil {
@@ -58,29 +76,117 @@ func setupRouter(svc *services.ItemService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	ctrl := controllers.NewItemController(svc)
+	router.GET("/api/barcode/:barcode", ctrl.LookupBarcode)
 	router.POST("/api/items", ctrl.CreateItem)
+	router.PUT("/api/items/:id", ctrl.UpdateItem)
+	router.DELETE("/api/items/:id", ctrl.DeleteItem)
 	return router
 }
 
-// --- Tests ---
+// --- LookupBarcode Tests ---
 
-func TestCreateItem_Success(t *testing.T) {
-	repo := &controllerTestRepo{
-		findResult: &models.Item{
-			ID:            "abc-123",
-			Name:          "Test Product",
-			Barcode:       "5000159484695",
-			Brand:         "TestBrand",
-			ContainerSize: "330ml",
-			ImageURL:      "https://example.com/img.jpg",
+func TestLookupBarcode_NewBarcode(t *testing.T) {
+	repo := &controllerTestRepo{}
+	offClient := &controllerTestOFF{
+		result: &models.Item{
+			Name:    "Coca-Cola",
+			Barcode: "5000159484695",
+			Brand:   "Coca-Cola",
 		},
+	}
+	svc := services.NewItemService(repo, offClient)
+	router := setupRouter(svc)
+
+	w := performRequest(router, "GET", "/api/barcode/5000159484695", nil)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", w.Code)
+	}
+
+	var result services.LookupResult
+	json.Unmarshal(w.Body.Bytes(), &result)
+	if !result.IsNew {
+		t.Error("expected is_new to be true")
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(result.Items))
+	}
+	if result.Items[0].Name != "Coca-Cola" {
+		t.Errorf("expected name 'Coca-Cola', got '%s'", result.Items[0].Name)
+	}
+}
+
+func TestLookupBarcode_WithExisting(t *testing.T) {
+	repo := &controllerTestRepo{
+		findByBarcodeResult: []models.Item{
+			{ID: "old-1", Name: "Old Coke", Barcode: "5000159484695"},
+		},
+	}
+	offClient := &controllerTestOFF{
+		result: &models.Item{Name: "Coca-Cola", Barcode: "5000159484695"},
+	}
+	svc := services.NewItemService(repo, offClient)
+	router := setupRouter(svc)
+
+	w := performRequest(router, "GET", "/api/barcode/5000159484695", nil)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", w.Code)
+	}
+
+	var result services.LookupResult
+	json.Unmarshal(w.Body.Bytes(), &result)
+	if result.IsNew {
+		t.Error("expected is_new to be false")
+	}
+	if len(result.Items) != 1 {
+		t.Errorf("expected 1 item, got %d", len(result.Items))
+	}
+}
+
+func TestLookupBarcode_NotFound(t *testing.T) {
+	repo := &controllerTestRepo{}
+	offClient := &controllerTestOFF{
+		err: clients.ErrProductNotFound,
+	}
+	svc := services.NewItemService(repo, offClient)
+	router := setupRouter(svc)
+
+	w := performRequest(router, "GET", "/api/barcode/0000000000000", nil)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected status 404, got %d", w.Code)
+	}
+}
+
+func TestLookupBarcode_InternalError(t *testing.T) {
+	repo := &controllerTestRepo{
+		findByBarcodeErr: errors.New("db failed"),
 	}
 	offClient := &controllerTestOFF{}
 	svc := services.NewItemService(repo, offClient)
 	router := setupRouter(svc)
 
+	w := performRequest(router, "GET", "/api/barcode/1234567890123", nil)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected status 500, got %d", w.Code)
+	}
+}
+
+// --- CreateItem Tests ---
+
+func TestCreateItem_Success(t *testing.T) {
+	repo := &controllerTestRepo{}
+	offClient := &controllerTestOFF{}
+	svc := services.NewItemService(repo, offClient)
+	router := setupRouter(svc)
+
 	w := performRequest(router, "POST", "/api/items", map[string]string{
-		"barcode": "5000159484695",
+		"name":           "Coca-Cola",
+		"barcode":        "5000159484695",
+		"brand":          "Coca-Cola",
+		"container_size": "330ml",
 	})
 
 	if w.Code != http.StatusCreated {
@@ -88,49 +194,27 @@ func TestCreateItem_Success(t *testing.T) {
 	}
 
 	var item models.Item
-	if err := json.Unmarshal(w.Body.Bytes(), &item); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
+	json.Unmarshal(w.Body.Bytes(), &item)
+	if item.ID == "" {
+		t.Error("expected a generated UUID")
 	}
-	if item.Name != "Test Product" {
-		t.Errorf("expected name 'Test Product', got '%s'", item.Name)
+	if item.Name != "Coca-Cola" {
+		t.Errorf("expected name 'Coca-Cola', got '%s'", item.Name)
 	}
-	if item.ID != "abc-123" {
-		t.Errorf("expected id 'abc-123', got '%s'", item.ID)
-	}
-}
-
-func TestCreateItem_NotFound(t *testing.T) {
-	repo := &controllerTestRepo{
-		findResult: nil,
-	}
-	offClient := &controllerTestOFF{
-		err: clients.ErrProductNotFound,
-	}
-	svc := services.NewItemService(repo, offClient)
-	router := setupRouter(svc)
-
-	w := performRequest(router, "POST", "/api/items", map[string]string{
-		"barcode": "0000000000000",
-	})
-
-	if w.Code != http.StatusNotFound {
-		t.Errorf("expected status 404, got %d", w.Code)
-	}
-
-	var body map[string]string
-	json.Unmarshal(w.Body.Bytes(), &body)
-	if body["error"] != "product not found for barcode" {
-		t.Errorf("unexpected error message: %s", body["error"])
+	if item.Barcode != "5000159484695" {
+		t.Errorf("expected barcode '5000159484695', got '%s'", item.Barcode)
 	}
 }
 
-func TestCreateItem_MissingBarcode(t *testing.T) {
+func TestCreateItem_MissingName(t *testing.T) {
 	repo := &controllerTestRepo{}
 	offClient := &controllerTestOFF{}
 	svc := services.NewItemService(repo, offClient)
 	router := setupRouter(svc)
 
-	w := performRequest(router, "POST", "/api/items", map[string]string{})
+	w := performRequest(router, "POST", "/api/items", map[string]string{
+		"barcode": "5000159484695",
+	})
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected status 400, got %d", w.Code)
@@ -152,15 +236,118 @@ func TestCreateItem_EmptyBody(t *testing.T) {
 
 func TestCreateItem_InternalError(t *testing.T) {
 	repo := &controllerTestRepo{
-		findErr: errors.New("database connection failed"),
+		createErr: errors.New("insert failed"),
 	}
 	offClient := &controllerTestOFF{}
 	svc := services.NewItemService(repo, offClient)
 	router := setupRouter(svc)
 
 	w := performRequest(router, "POST", "/api/items", map[string]string{
-		"barcode": "1234567890123",
+		"name": "Test",
 	})
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected status 500, got %d", w.Code)
+	}
+}
+
+// --- UpdateItem Tests ---
+
+func TestUpdateItem_Success(t *testing.T) {
+	repo := &controllerTestRepo{
+		findByIDResult: &models.Item{ID: "abc-123", Name: "Old Name"},
+	}
+	offClient := &controllerTestOFF{}
+	svc := services.NewItemService(repo, offClient)
+	router := setupRouter(svc)
+
+	w := performRequest(router, "PUT", "/api/items/abc-123", map[string]string{
+		"name":  "New Name",
+		"brand": "New Brand",
+	})
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", w.Code)
+	}
+
+	var item models.Item
+	json.Unmarshal(w.Body.Bytes(), &item)
+	if item.ID != "abc-123" {
+		t.Errorf("expected id 'abc-123', got '%s'", item.ID)
+	}
+	if item.Name != "New Name" {
+		t.Errorf("expected name 'New Name', got '%s'", item.Name)
+	}
+}
+
+func TestUpdateItem_NotFound(t *testing.T) {
+	repo := &controllerTestRepo{findByIDResult: nil}
+	offClient := &controllerTestOFF{}
+	svc := services.NewItemService(repo, offClient)
+	router := setupRouter(svc)
+
+	w := performRequest(router, "PUT", "/api/items/nonexistent", map[string]string{
+		"name": "X",
+	})
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected status 404, got %d", w.Code)
+	}
+}
+
+func TestUpdateItem_InternalError(t *testing.T) {
+	repo := &controllerTestRepo{
+		findByIDResult: &models.Item{ID: "abc-123"},
+		updateErr:      errors.New("update failed"),
+	}
+	offClient := &controllerTestOFF{}
+	svc := services.NewItemService(repo, offClient)
+	router := setupRouter(svc)
+
+	w := performRequest(router, "PUT", "/api/items/abc-123", map[string]string{
+		"name": "X",
+	})
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected status 500, got %d", w.Code)
+	}
+}
+
+// --- DeleteItem Tests ---
+
+func TestDeleteItem_Success(t *testing.T) {
+	repo := &controllerTestRepo{}
+	offClient := &controllerTestOFF{}
+	svc := services.NewItemService(repo, offClient)
+	router := setupRouter(svc)
+
+	w := performRequest(router, "DELETE", "/api/items/abc-123", nil)
+
+	if w.Code != http.StatusNoContent {
+		t.Errorf("expected status 204, got %d", w.Code)
+	}
+}
+
+func TestDeleteItem_NotFound(t *testing.T) {
+	repo := &controllerTestRepo{deleteErr: pgx.ErrNoRows}
+	offClient := &controllerTestOFF{}
+	svc := services.NewItemService(repo, offClient)
+	router := setupRouter(svc)
+
+	w := performRequest(router, "DELETE", "/api/items/nonexistent", nil)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected status 404, got %d", w.Code)
+	}
+}
+
+func TestDeleteItem_InternalError(t *testing.T) {
+	repo := &controllerTestRepo{deleteErr: errors.New("delete failed")}
+	offClient := &controllerTestOFF{}
+	svc := services.NewItemService(repo, offClient)
+	router := setupRouter(svc)
+
+	w := performRequest(router, "DELETE", "/api/items/abc-123", nil)
 
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("expected status 500, got %d", w.Code)

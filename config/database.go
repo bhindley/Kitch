@@ -41,7 +41,8 @@ func RunMigrations(pool *pgxpool.Pool) error {
 		image_url      TEXT NOT NULL DEFAULT ''
 	);
 
-	CREATE UNIQUE INDEX IF NOT EXISTS idx_items_barcode ON items (barcode)
+	DROP INDEX IF EXISTS idx_items_barcode;
+	CREATE INDEX IF NOT EXISTS idx_items_barcode_non_unique ON items (barcode)
 		WHERE barcode != '';
 	`
 
