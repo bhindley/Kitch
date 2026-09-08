@@ -1,0 +1,13 @@
+Kitch
+Kitch.exe
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+.env
+.git
+.gitignore
+README.md
+docker-compose.yml
